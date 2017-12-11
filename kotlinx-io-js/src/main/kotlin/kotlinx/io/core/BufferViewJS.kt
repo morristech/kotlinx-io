@@ -333,7 +333,7 @@ actual class BufferView internal constructor(
         readPosition = rp + length
     }
 
-    actual override fun readFully(dst: BufferView, length: Int) {
+    actual final override fun readFully(dst: BufferView, length: Int) {
         if (readRemaining < length) throw IllegalStateException("Not enough bytes available ($readRemaining) to read $length bytes")
         if (dst.writeRemaining < length) throw IllegalArgumentException("Not enough free space in dst buffer to write $length bytes")
 
