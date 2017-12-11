@@ -67,3 +67,6 @@ fun Input.discardExact(n: Long) {
     }
 }
 
+fun Input.discardExact(n: Int) {
+    discardExact(n.toLong())
+}
