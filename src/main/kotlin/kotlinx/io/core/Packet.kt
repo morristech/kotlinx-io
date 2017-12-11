@@ -503,7 +503,7 @@ abstract class ByteReadPacketBase(protected var head: BufferView,
         val head = head
 
         if (head === BufferView.Empty) {
-            doFill()
+            if (doFill() == null) return null
             return prepareRead(minSize)
         }
 
