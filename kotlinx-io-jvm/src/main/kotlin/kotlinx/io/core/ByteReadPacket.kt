@@ -7,7 +7,7 @@ actual class ByteReadPacket
     actual constructor(head: BufferView, pool: ObjectPool<BufferView>) : ByteReadPacketBase(head, pool), Input {
 
     override fun readFully(dst: ByteBuffer, length: Int) {
-        require(length >= remaining) { "Not enough bytes available ($remaining) to read $length bytes" }
+        require(length <= remaining) { "Not enough bytes available ($remaining) to read $length bytes" }
         require(length <= dst.remaining()) { "Not enough free space in destination buffer to write $length bytes" }
         var copied = 0
 
