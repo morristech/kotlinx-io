@@ -13,13 +13,14 @@ buildscript {
     }
     dependencies {
         classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+        classpath "org.jetbrains.kotlin:kotlin-allopen:$kotlin_version"
         classpath "org.jetbrains.kotlin:kotlin-frontend-plugin:0.0.25"
     }
 }
 
 plugins {
     id "com.jfrog.bintray" version "1.7.3"
-    id 'net.researchgate.release' version '2.4.0'
+    id 'net.researchgate.release' version '2.6.0'
 }
 
 apply plugin: 'kotlin-platform-common'
@@ -51,9 +52,9 @@ allprojects {
         task sourceJar(type: Jar, dependsOn: classes) {
             classifier 'sources'
             from sourceSets.main.kotlin
-            duplicatesStrategy = "exclude"
-            def platformSrc = sourceSets.main.kotlin
-            def commonSrc = project(':').sourceSets.main.kotlin
+            duplicatesStrategy DuplicatesStrategy.EXCLUDE
+            def platformSrc = sourceSets.main.allSource
+            def commonSrc = project(':').sourceSets.main.allSource
             from (platformSrc + commonSrc)
         }
     }
