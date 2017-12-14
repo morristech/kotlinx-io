@@ -16,16 +16,16 @@ abstract class ByteReadPacketBase(private var head: BufferView,
     /**
      * Number of bytes available for read
      */
-    var remaining: Long = remaining
-        private set
+    val remaining: Long get() = headRemaining.toLong() + tailRemaining
 
     private var headRemaining = head.readRemaining
+    private var tailRemaining = remaining - headRemaining //head.next?.remainingAll() ?: 0
 
     /**
      * `true` if no bytes available for read
      */
     val isEmpty: Boolean
-        get() = remaining == 0L
+        get() = headRemaining == 0 && tailRemaining == 0L
 
     /**
      * Returns a copy of the packet. The original packet and the copy could be used concurrently. Both need to be
@@ -40,11 +40,11 @@ abstract class ByteReadPacketBase(private var head: BufferView,
     fun release() {
         val head = head
         val empty = BufferView.Empty
-        remaining = 0
 
         if (head !== empty) {
             this.head = empty
             headRemaining = 0
+            tailRemaining = 0
             head.releaseAll(pool)
         }
     }
@@ -55,7 +55,8 @@ abstract class ByteReadPacketBase(private var head: BufferView,
 
         if (head === empty) return null
         this.head = empty
-        this.remaining = 0
+        headRemaining = 0
+        tailRemaining = 0
         return head
     }
 
@@ -67,6 +68,7 @@ abstract class ByteReadPacketBase(private var head: BufferView,
 
         this.head = next ?: empty
         this.headRemaining = next?.readRemaining ?: 0
+        this.tailRemaining -= head.readRemaining
 
         return head
     }
@@ -75,7 +77,6 @@ abstract class ByteReadPacketBase(private var head: BufferView,
         val headRemaining = headRemaining
         if (headRemaining > 1) {
             this.headRemaining = headRemaining - 1
-            remaining--
             return head.readByte()
         }
 
@@ -88,7 +89,6 @@ abstract class ByteReadPacketBase(private var head: BufferView,
 
         if (headRemaining == 1) {
             this.headRemaining = headRemaining - 1
-            remaining--
             return head.readByte().also { ensureNext(head) }
         } else {
             return readByteSlow(head)
@@ -215,7 +215,6 @@ abstract class ByteReadPacketBase(private var head: BufferView,
             val after = buffer.readRemaining
             val delta = before - after
             if (delta > 0) {
-                remaining -= delta
                 headRemaining -= delta
             }
             if (after == 0) {
@@ -470,7 +469,6 @@ abstract class ByteReadPacketBase(private var head: BufferView,
         val current = prepareRead(1) ?: return skipped
         val size = minOf(current.readRemaining, n)
         current.discardExact(size)
-        remaining -= size
         headRemaining -= size
         afterRead()
 
@@ -483,7 +481,6 @@ abstract class ByteReadPacketBase(private var head: BufferView,
         val size = minOf(length, current.readRemaining)
 
         current.readFully(array, offset, size)
-        remaining -= size
         headRemaining -= size
 
         return if (size != length || current.readRemaining == 0) {
@@ -496,19 +493,13 @@ abstract class ByteReadPacketBase(private var head: BufferView,
 
     private inline fun <R> readN(n: Int, block: BufferView.() -> R): R {
         val bb = prepareRead(n) ?: notEnoughBytesAvailable(n)
-        val before = bb.readRemaining
-
         val rc = block(bb)
 
         val after = bb.readRemaining
-        val delta = before - after
-        if (delta > 0) {
-            remaining -= delta
-            headRemaining -= delta
-        }
-
         if (after == 0) {
             ensureNext(bb)
+        } else {
+            headRemaining = after
         }
 
         return rc
@@ -529,11 +520,10 @@ abstract class ByteReadPacketBase(private var head: BufferView,
                 current.readRemaining
             } else before
 
-            @Suppress("DEPRECATION_ERROR")
-            `$bytesRead$`(before - after)
-
             if (after == 0) {
                 current = @Suppress("DEPRECATION_ERROR") `$ensureNext$`(current) ?: break
+            } else {
+                @Suppress("DEPRECATION_ERROR") `$updateRemaining$`(after)
             }
         } while (continueFlag)
     }
@@ -551,8 +541,6 @@ abstract class ByteReadPacketBase(private var head: BufferView,
                     size = block(current)
                 } finally {
                     after = current.readRemaining
-                    @Suppress("DEPRECATION_ERROR")
-                    `$bytesRead$`(before - after)
                 }
             } else {
                 after = before
@@ -562,18 +550,15 @@ abstract class ByteReadPacketBase(private var head: BufferView,
                 current = @Suppress("DEPRECATION_ERROR") `$ensureNext$`(current) ?: break
             } else if (after < size) {
                 current = @Suppress("DEPRECATION_ERROR") `$prepareRead$`(size) ?: break
+            } else {
+                @Suppress("DEPRECATION_ERROR") `$updateRemaining$`(after)
             }
         } while (size > 0)
     }
 
-    @Deprecated("Non public API", level = DeprecationLevel.ERROR)
-    fun `$bytesRead$`(n: Int) {
-        require(n >= 0)
-        require(n <= remaining)
-        require(n <= headRemaining)
-
-        remaining -= n
-        headRemaining -= n
+    @Deprecated("Non-public API. Do not use otherwise packet could be damaged", level = DeprecationLevel.ERROR)
+    fun `$updateRemaining$`(remaining: Int) {
+        headRemaining = remaining
     }
 
     @Deprecated("Non public API", level = DeprecationLevel.ERROR)
@@ -594,13 +579,16 @@ abstract class ByteReadPacketBase(private var head: BufferView,
         if (next == null) {
             head = empty
             headRemaining = 0
+            tailRemaining = 0L
             return null
         }
 
         if (next.canRead()) {
             head = next
             next.byteOrder = byteOrder
-            headRemaining = next.readRemaining
+            val nextRemaining = next.readRemaining
+            headRemaining = nextRemaining
+            tailRemaining -= nextRemaining
             return next
         } else {
             return ensureNext(next, empty)
@@ -615,12 +603,13 @@ abstract class ByteReadPacketBase(private var head: BufferView,
         if (tail === BufferView.Empty) {
             head = chunk
             chunk.byteOrder = byteOrder
+            require(tailRemaining == 0L)
             headRemaining = chunk.readRemaining
+            tailRemaining = chunk.next?.remainingAll() ?: 0L
         } else {
             tail.next = chunk
+            tailRemaining += chunk.remainingAll()
         }
-
-        remaining += chunk.remainingAll()
 
         return chunk
     }
@@ -645,9 +634,12 @@ abstract class ByteReadPacketBase(private var head: BufferView,
 
             return prepareRead(minSize, next)
         } else {
+            val before = next.readRemaining
             head.writeBufferAppend(next, minSize)
+            val after = next.readRemaining
             headRemaining = head.readRemaining
-            if (next.readRemaining == 0) {
+            tailRemaining -= before - after
+            if (after == 0) {
                 head.next = next.next
                 next.release(pool)
             }
@@ -673,7 +665,9 @@ abstract class ByteReadPacketBase(private var head: BufferView,
     internal fun releaseHead(head: BufferView) {
         val next = head.next ?: BufferView.Empty
         this.head = next
-        this.headRemaining = next.readRemaining
+        val nextRemaining = next.readRemaining
+        this.headRemaining = nextRemaining
+        this.tailRemaining -= nextRemaining
         head.release(pool)
     }
 
